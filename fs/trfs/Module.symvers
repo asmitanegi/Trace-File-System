@@ -1,0 +1,3 @@
+0x17190158	is_enabled	/usr/src/hw2-cse506g15/fs/trfs/trfs	EXPORT_SYMBOL
+0xfde1600f	trfs_add_record	/usr/src/hw2-cse506g15/fs/trfs/trfs	EXPORT_SYMBOL
+0xc1ae1826	get_trfs_record_struct	/usr/src/hw2-cse506g15/fs/trfs/trfs	EXPORT_SYMBOL

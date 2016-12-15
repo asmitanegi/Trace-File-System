@@ -1,0 +1,262 @@
+Submitted files – 
+
+*******************************************************************************Files structure **********************************************************************************
+
+Hw2-cse506g15 folder contains – 
+
+1.) Hw2 folder  - this contains the following user level files – 
+
+>>treplay.c - Trace replayer program
+>>trctl.c  -  Ioctl bitmap get-set program.
+>>Makefile - compiles the user level programs .
+>>sample_read.c - sample c program to open read and close a file.
+>>sample_write.c - sample c program to open , write and close a file.
+>>README.HW2   
+
+2.) fs/trfs folder – This is the kernel trace fs filesystem directory . All our kernel level files reside here . In addition to the existing files we have included the following newfiles – 
+
+>> Makefile – Will clean , compile ,rebuild and mount the filesystem . Please go through its individual operations and execute them in sequence as described below. 
+>> Record.h  - global header file referenced both in user level and kernel level code . 
+  
+Supported operations – As of now we support the tracing of following 11 filesystem operations  
+
+Create file
+Open file 
+Close file
+Mkdir 
+Rmdir
+Unlink
+Read
+Write
+Symlink file or directory
+Hardlink 
+Rename of file or directory
+
+
+***************************************************************************** Testing and execution steps*********************************************************************** 
+
+Please execute the following steps in the order mentioned below – 
+1.) Go to fs/trfs . And run the following commands in order . 
+ 
+>>> make clean            
+
+ This operation will 
+>> clean the object files.
+>> Unmount the file system 
+>> Rmmod trfs.ko
+>> Delete the existing Tfile. 
+
+Please note that if you receive an error in make clean . Then the filesystem was already unmounted . So proceed with restore_dirs operation.  
+
+>>> make restore_dirs 
+ 
+We create 2 directories  as follows   
+  /usr/src/hw2-cse506g15/dir_test -------> our filesystem will be mounted on this directory.   
+  /usr/src/hw2-cse506g15/dir_replica ------->  We run our replayer on this directory. 
+
+make restore_dirs operation restores both directories to their initial state .After a successful replay , state of dir_replica should be same as state of dir_test. 
+
+
+>>> make trfs 
+This operation will 
+>> make trfs filesystem  modules
+>> insmod trfs.ko 
+>> mount trfs -> device path is /usr/src/hw2-cse506g15/dir_test. Mount path is /mnt/trfs
+
+2.)  Next go to hw2 directory and run the following commands 
+      
+>>> make trctl  
+This compiles the trctl.c file. 
+      
+>>> make treplay 
+Compiles the treplay.c file .
+      
+>>> make sample 
+This compiles the sample_read.c and sample_write.c files. You can use these programs to execute read and write file operations on the mount directory.   
+
+>>> ./trctl  /mnt/trfs
+To check the current bitmat value
+      
+>>> ./trctl cmd /mnt/trfs
+Use this command to turn on/off tracing of specific operations . 
+
+3.) Next go to the mount directory (/mnt/trfs) and run a few a operations such as mkdir, rmdir rename , read, write ,etc.  You can use our sample_read and sample_write files to execute read and write operations. 
+
+4.) Our tfile path is /tmp/tfile1.txt. Now cd back to hw2 directory . and run the replayer as follows . We have hardcoded the target directory path as /usr/src/hw2-cse506g15/dir_replica  
+    
+>>> ./treplay –n /tmp/tfile1.txt 
+This will run the replayer in display mode and display all the records traced. 
+
+>>> ./treplay –s /tmp/tfile1.txt 
+This will run the replayer in strict mode. If any operation results in different return values or success status . Replay will be aborted. 
+
+>>> ./treplay /tmp/tfile1.txt
+This will the replayer in non strict mode .  
+
+After running the replayer , go to /usr/src/hw2-cse506g15/dir_test and check the state of directory. If the replay was successful,/usr/src/hw2-cse506g15/dir_test should be same as /usr/src/hw2-cse506g15/dir_replica. 
+
+
+
+
+************************************************************************ DESIGN **************************************************************************************************
+
+
+The trace file path, current set bitmap, mutex  is stored in a pointer name out_fd, bitmap and trfs_record_lock  respectively inside struct trfs_sb_info . This is done so that these fields can be accessed easily  through superblock in our file system.
+Tracing of each operation is done by intercepting them in trfs_<operation> function. 
+Here a structure is constructed which contains a list of dentry(list needed for operations which have 2 dentries as arguments eg.  Hardlink and rename ), permission mode, success flag , operation type, file pointer (for read, write open).  The final record that is to be written to file is build using these information, the concept of containers is used while storing information like data written, pathname of files and data read.
+
+struct trfs_record_struct_file
+{
+        int record_no;	  	//Record Number 
+        short int buf_size;  	//Size of the record
+        trfs_operation type;	//Enum, gives record type like MKDIR or OPEN
+        unsigned int flags;	//flag set in the file pointer
+        unsigned int permission_mode;		//Permission mode for the file
+        short int path_len;	//size of data in the container path_name
+        int success_flag;		//return value of of the oprration
+        struct file* k_fd;		//the file pointer returned by the kernel(just used as an int in user space)
+        char path_name[1];	//All data like 	file names, data written or read name of symlink or hardlink etc
+};
+
+Values corresponding to each operation is set in this struct and it is written to another buffer, when that buffer gets full all the data is written to the file.
+If the size of record is bigger than page size the data is written in chunks to our file.
+Also a kernel thread runs which wakes up in every 3 seconds and empties all the content of the buffer to the file.
+ 
+
+LOCKING  AND THREADING
+
+Using kthreads , we spawn a worker thread during module initialization . We are using a shared buffer to write our operation logs into this buffer. Worker thread is responsible for reading this buffer and writing it to Tfile. This buffer is locked exclusively using mutex lock. Our thread wakes up every 3 seconds and if there are any records present in the buffer, it writes it to the file . Otherwise , the log operations initiate the buffer write to file in case the buffer is full and worker thread didnt wake up.
+
+
+************************************************************* EXTRA CREDIT CHECKSUM IMPLEMENTATION *********************************************************************************
+
+Uncomment the following line in trfs/Makefile and hw2/Makefile in order to enable Extra_credit mode.
+
+>>>> #EXTRA_CFLAGS += -DEXTRA_CREDIT=10
+
+Checksum is implemented using the api crc32, this is done to maintain the integrity of record.
+While replaying the records if the checksum set by kernel is matched with the checksum calculated again in user level then we process the record otherwise we skip it depending on the flag -s set by user.
+
+
+
+****************************************************************** IOCTL IMPLEMENTATION  ******************************************************************************************
+ 
+Relevant files
+
+>> hw2/trctl.c  - user level code which issues the ioctl system call for bitmap get and set .
+>> trfs/file.c –  kernel file.c which implements the unlocked_ioctl function where we receive the ioctl system call.
+>> trfs/record.h – global header file containing IOCTL command definitions. (Referenced both in user level and kernel .
+
+
+How to run IOCTL program
+
+1.) After you have compiled the trfs filesystem and mounted it, go to hw2 folder and run the following commands. 
+    
+>>> make trctl                     
+Compile the code.                    
+
+>>> ./trctl /mnt/trfs            
+Retrieve the current value of bitmap.
+
+>>> ./trctl 0xabbd6632 /mnt/trfs        
+Set the value of bitmap . 
+
+>>>./trctl all /mnt/trfs              
+Switch on all method tracing.
+
+>>> ./trctl none /mnt/trfs           
+Switch off all method tracing. 
+
+                       
+Supported functionality – We support a 32 bit bitmap value to toggle tracing of our various filesystem methods. We use the rightmost 11 bits of this bitmap to trace 11 file system methods. 
+
+One of the following values should be passed to set the bitmap . 
+
+“all” – This will switch on all the filesystem methods tracing . Internally we set the bitmap value as 0xffffffff.
+
+“none” – This will switch off all filesystem methods tracing. Internally we set the bitmap value as 0x00000000.
+
+“0x000006de” – As an example, this will switch on the operations based on the positions of bit set. Following is a table describing each operation and their corresponding bitmap value. Each operation is represented by a single bit (starting from the rightmost bit).
+
+Method      Bitmap value 
+
+Create      0x00000001
+Open        0x00000002
+Close       0x00000004
+Mkdir       0x00000008
+Rmdir       0x00000010
+Unlink      0x00000020
+Read        0x00000040
+Write       0x00000080
+Symlink     0x00000100
+Hardlink    0x00000200
+Rename      0x00000400
+
+
+By default,  after mounting , all filesystem methods tracing is switched on. (value – 0xffffffff). 
+
+As an example if you have to switch off the tracing the of open, close and rmdir operations and keep all the rest as switched on. Then set the bitmap value as 0xfffffdf9 through userland trctl program.  
+
+Error checks – 
+
+1.)	Number of arguments passed should be 3 (for setting the bitmap) or 2 (for retrieving the bitmap) . Otherwise will result in error.
+2.)	If the ioctl set or get call fails , an error will occur.
+3.)	If an invalid mount point is passed , error will occur.
+4.)	If some random value is passed in cmd argument , bitmap value will be set to 0.
+
+Design - Using the IOCTL system call , we call a IOCTL_SET_MSG command to set the bitmap contained in the arg pointer. This bitmap value is then received in Unlocked_ioctl function in file.c to set the bitmap defined in the super block private variable. 
+
+Using the IOCTL system call, we call the IOCTL_GET_MSG command to retrieve the bitmap value from filesystem. The value is retrieved in ret_arg pointer. 
+
+********************************************************************** IOCTL EXTRA CREDIT *************************************************************************************** 
+
+
+How to run – 
+
+1.) Uncomment the following line in trfs/Makefile and hw2/Makefile in order to enable Extra_credit mode. 
+ 
+>>>> #EXTRA_CFLAGS += -DEXTRA_CREDIT=10
+
+
+2.) Then run the following commands. 
+    
+ >>> make trctl                     
+Compile the code.                    
+
+>>> ./trctl /mnt/trfs            
+Retrieve the current value of bitmap.
+
+>>> ./trctl +open –close -create /mnt/trfs        
+enable open tracing. Disable close and create tracing. . 
+
+>>>     ./trctl all /mnt/trfs              
+Switch on all method tracing.
+
+>>> ./trctl none /mnt/trfs           
+Switch off all method tracing. 
+
+>>> ./trctl 0xabbd6632 /mnt/trfs        
+Set the value of bitmap as 0xabbd6632.
+
+
+Functionality - In extra credit mode , we support toggling of individual bit operations. Pass  “+op_type” to turn on op_type.  Pass “-op_type” to turn off op_type . Following is a 
+list of values for each op_type.
+
+ 
+Method Cmd  (all small letters)
+Create       create
+Open         open
+Close        close
+Mkdir        mkdir
+Rmdir        rmdir
+Unlink       unlink
+Read         read
+Write        write
+Symlink      symlink
+Hardlink     hardlink
+Rename       rename
+
+
+Error checks – Similar as mentioned above.
+
+Notes – Please note if there is some formatting error in the arguments you pass , the bitmap value might set to 0 . So If you notice unexpected bitmap values , make sure your arguments spacing and format is correct and try again by resetting all the values.
